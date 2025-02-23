@@ -1,58 +1,79 @@
 #include <WiFi.h>
-#include <Wire.h>
-#include <Adafruit_MLX90614.h>
-#include <GoogleSheets.h>
+#include <HTTPClient.h>
 
-#define IR_SENSOR_PIN 13
-#define VIBRATION_SENSOR_PIN 14
+#define HALL_PIN       35    // Digital pin connected to the Hall effect sensor
+#define VIBRATION_PIN  34    // Digital pin connected to the vibration sensor
+#define BUZZER_PIN     32    // Digital pin connected to the buzzer
+#define SEND_INTERVAL  5000  // Interval for sending data (milliseconds)
 
-#define WIFI_SSID "YourWiFiSSID"
-#define WIFI_PASSWORD "YourWiFiPassword"
+// WiFi credentials
+const char *ssid = "wifi name";
+const char *password = "wifi password";
 
-#define GOOGLE_SHEET_ID "YourGoogleSheetID"
-#define GOOGLE_SHEET_NAME "Sheet1"
+// Google Script ID
+const char *GOOGLE_SCRIPT_ID = "your script ID";
 
-const char* GSCRIPT_ID = "YourGoogleAppsScriptWebAppURL";
+volatile int magnetCount = 0;
+bool vibrationDetected = false;
 
-Adafruit_MLX90614 mlx = Adafruit_MLX90614();
-GoogleSheets GSheets;
-
-int count = 0;
-float temperature = 0.0;
-int vibrationValue = 0;
+void IRAM_ATTR hallSensorISR() {
+  magnetCount++;  // Increment magnet count on each interrupt
+}
 
 void setup() {
   Serial.begin(115200);
-  pinMode(IR_SENSOR_PIN, INPUT);
-  pinMode(VIBRATION_SENSOR_PIN, INPUT);
+  delay(10);
 
-  mlx.begin();
-  connectToWiFi();
-  GSheets.begin(GSCRIPT_ID);
+  // Connect to WiFi
+  Serial.println("Connecting to WiFi");
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("WiFi connected");
+
+  // Initialize Hall effect sensor
+  pinMode(HALL_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(HALL_PIN), hallSensorISR, RISING);
+
+  // Initialize vibration sensor
+  pinMode(VIBRATION_PIN, INPUT);
+
+  // Initialize buzzer
+  pinMode(BUZZER_PIN, OUTPUT);
 }
 
 void loop() {
-  temperature = mlx.readObjectTempC();
-  count = digitalRead(IR_SENSOR_PIN); // Assuming IR sensor gives digital output
-  vibrationValue = analogRead(VIBRATION_SENSOR_PIN);
-
-  // Send data to Google Sheets
-  sendDataToGoogleSheets();
-
-  delay(5000); // Delay 5 seconds before next reading
-}
-
-void connectToWiFi() {
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  Serial.print("Connecting to WiFi");
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(1000);
-    Serial.print(".");
+  // Check for vibration
+  if (digitalRead(VIBRATION_PIN) == HIGH) {
+    vibrationDetected = true;
+    Serial.println("Vibration detected");
+    digitalWrite(BUZZER_PIN, HIGH); // Turn on buzzer
+  } else {
+    vibrationDetected = false;
+    digitalWrite(BUZZER_PIN, LOW); // Turn off buzzer
   }
-  Serial.println("Connected");
+
+  delay(SEND_INTERVAL);  // Wait for the send interval
+
+  // Send data to Google Spreadsheet
+  sendData("tag=magnet_count&value=" + String(magnetCount));
+  sendData("tag=vibration_status&value=" + String(vibrationDetected ? "vibration detected" : "no vibration"));
 }
 
-void sendDataToGoogleSheets() {
-  String data = String(temperature) + "," + String(count) + "," + String(vibrationValue);
-  GSheets.appendRow(GOOGLE_SHEET_ID, GOOGLE_SHEET_NAME, data);
+void sendData(String params) {
+  HTTPClient http;
+
+  // Construct the URL with the Google Script ID and parameters
+  String url = "https://script.google.com/macros/s/" + String(GOOGLE_SCRIPT_ID) + "/exec?" + params;
+
+  // Send HTTP GET request to the Google Apps Script web app
+  http.begin(url); // Specify the URL
+  int httpCode = http.GET();
+  http.end();
+
+  // Print the result of the HTTP request
+  Serial.print("HTTP response code: ");
+  Serial.println(httpCode);
 }
